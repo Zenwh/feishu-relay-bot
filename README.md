@@ -2,6 +2,8 @@
 
 > 飞书 Bot 隧道 — 把外网的 OpenAI / Anthropic 客户端，桥接到内网的 LLM 网关。
 
+📚 **[5 分钟快速部署](docs/QUICKSTART.md)** · **[完整部署手册](docs/DEPLOY.md)** · **[xpage 接口契约](xpage_mock/README.md)**
+
 ## 这是什么
 
 一个 Python 服务，用**飞书 IM 消息**当 NAT 穿透通道：
