@@ -40,6 +40,19 @@ class Bot:
             thread_name_prefix=f"bot-{cfg.name}",
         )
 
+        # 本地 stats（累计计数；进程级，不持久化）
+        import threading as _t
+        self._stats_lock = _t.Lock()
+        self._stats = {
+            "requests_total": 0,
+            "requests_ok": 0,
+            "requests_failed": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "last_request_at": "",
+            "last_ok_at": "",
+        }
+
         # lark 客户端（用来发消息）
         self._lark_client = lark.Client.builder() \
             .app_id(cfg.app_id) \
@@ -78,6 +91,28 @@ class Bot:
 
     def is_alive(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
+
+    # ---- stats --------------------------------------------------------------
+
+    def stats_snapshot(self) -> dict:
+        """获取当前 stats 副本（用于上报）。"""
+        with self._stats_lock:
+            return dict(self._stats)
+
+    def _record_request(self, ok: bool, tokens_in: int = 0, tokens_out: int = 0) -> None:
+        """每次处理完一次请求，更新 stats。"""
+        import datetime as _dt
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        with self._stats_lock:
+            self._stats["requests_total"] += 1
+            if ok:
+                self._stats["requests_ok"] += 1
+                self._stats["tokens_in"] += tokens_in
+                self._stats["tokens_out"] += tokens_out
+                self._stats["last_ok_at"] = now
+            else:
+                self._stats["requests_failed"] += 1
+            self._stats["last_request_at"] = now
 
     # ---- 事件处理 -----------------------------------------------------------
 
@@ -148,6 +183,12 @@ class Bot:
         )
 
         if status == 200:
+            usage = resp.get("usage") or {}
+            self._record_request(
+                ok=True,
+                tokens_in=usage.get("prompt_tokens", 0),
+                tokens_out=usage.get("completion_tokens", 0),
+            )
             self._reply_json(chat_id, make_success_response(
                 req_id,
                 content=resp["content"],
@@ -155,6 +196,7 @@ class Bot:
                 finish_reason=resp["finish_reason"],
             ))
         else:
+            self._record_request(ok=False)
             err_msg = (
                 resp.get("error") if isinstance(resp.get("error"), str)
                 else (resp.get("msg") or str(resp)[:300])
@@ -178,8 +220,15 @@ class Bot:
         status, resp = self.upstream.call_messages_native(payload)
 
         if status == 200 and "content" in resp:
+            usage = resp.get("usage") or {}
+            self._record_request(
+                ok=True,
+                tokens_in=usage.get("input_tokens", 0),
+                tokens_out=usage.get("output_tokens", 0),
+            )
             self._reply_json(chat_id, make_native_success_response(req_id, resp))
         else:
+            self._record_request(ok=False)
             err_msg = (
                 resp.get("error", {}).get("message")
                 if isinstance(resp.get("error"), dict)

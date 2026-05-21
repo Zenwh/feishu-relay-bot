@@ -66,6 +66,15 @@ class RuntimeConfig(BaseModel):
     reconnect_backoff_s: int = 5
 
 
+class CenterConfig(BaseModel):
+    """运营中心上报配置。"""
+    enabled: bool = Field(True, description="是否启用心跳上报")
+    url: str = Field("", description="中心 base URL，例如 https://offer.yxzrkj.cn/llm/api")
+    node_id: str = Field("auto", description="节点唯一 ID。'auto' 时自动生成 (hostname-uuid6)")
+    shared_secret: str = Field("", description="可选的共享密钥")
+    interval_s: int = Field(30, description="心跳间隔（秒）")
+
+
 # ============================================================================
 # 顶层配置
 # ============================================================================
@@ -77,6 +86,7 @@ class Config(BaseModel):
     bots: List[BotConfig] = Field(..., min_length=1)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    center: CenterConfig = Field(default_factory=CenterConfig)
 
     def effective_upstream_for(self, bot: BotConfig) -> UpstreamConfig:
         """获取某个 bot 的实际上游配置（bot.upstream 覆盖 global）。"""
@@ -116,6 +126,9 @@ ENV_OVERRIDES = {
     "UPSTREAM_BASE_URL": ("upstream", "base_url"),
     "UPSTREAM_API_KEY": ("upstream", "api_key"),
     "LOG_LEVEL": ("logging", "level"),
+    "CENTER_URL": ("center", "url"),
+    "NODE_ID": ("center", "node_id"),
+    "CENTER_SECRET": ("center", "shared_secret"),
 }
 
 
