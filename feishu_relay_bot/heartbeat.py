@@ -135,6 +135,7 @@ class HeartbeatClient:
             "ip": self._ip,
             "started_at": self._started_at,
             "status": "online",
+            "capabilities": ["zlib"],
         }
         try:
             extra = self.payload_fn() or {}

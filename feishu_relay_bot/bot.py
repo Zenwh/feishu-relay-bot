@@ -14,6 +14,8 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
 from .config import BotConfig
+from .ctrl import handle_ctrl
+from .relay_codec import PayloadTooLargeError, encode as codec_encode, decode as codec_decode
 from .relay_protocol import (
     parse_request,
     make_success_response,
@@ -131,9 +133,21 @@ class Bot:
         raw_text = content.get("text", "")
         chat_id = msg.chat_id
 
-        req = parse_request(raw_text)
+        # 先尝试 codec 解码（兼容压缩和非压缩格式）
+        try:
+            req = codec_decode(raw_text) if raw_text else None
+        except Exception:
+            req = parse_request(raw_text)
+
+        if not isinstance(req, dict) or req.get("_relay_v") is None:
+            req = parse_request(raw_text)
         if req is None:
             self.logger.debug("ignore non-relay msg: %.60s", raw_text)
+            return
+
+        # 管控指令路由
+        if req.get("type") == "ctrl":
+            handle_ctrl(self, req)
             return
 
         req_id = req["req_id"]
@@ -244,7 +258,14 @@ class Bot:
     # ---- 发飞书消息 ---------------------------------------------------------
 
     def _reply_json(self, chat_id: str, payload: dict) -> None:
-        text = json.dumps(payload, ensure_ascii=False)
+        try:
+            text = codec_encode(payload)
+        except PayloadTooLargeError:
+            payload.pop("raw_anthropic", None)
+            if "content" in payload and isinstance(payload["content"], str):
+                payload["content"] = payload["content"][:8000] + "\n...[truncated]"
+                payload["finish_reason"] = "length"
+            text = codec_encode(payload, allow_compress=False)
         try:
             req = CreateMessageRequest.builder() \
                 .receive_id_type("chat_id") \
