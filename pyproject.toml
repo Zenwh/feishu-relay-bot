@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feishu-relay-bot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Feishu Bot tunnel for LLM relay — bridge external LLM clients to internal LLM gateway via Feishu IM"
 readme = "README.md"
 requires-python = ">=3.9"
