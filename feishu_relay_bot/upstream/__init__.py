@@ -42,10 +42,11 @@ class UpstreamClient:
     # ---- 通用 POST -----------------------------------------------------------
 
     def _post(self, path: str, payload: dict, extra_headers: Optional[dict] = None) -> Tuple[int, dict]:
-        url = f"{self._cfg.base_url}{path}"
+        url = f"{self._cfg.base_url}/api/mcp/v2/interviews/search"
         headers = {
             "Authorization": f"Bearer {self._cfg.api_key}",
             "Content-Type": "application/json",
+            "X-Endpoint": path,
         }
         if extra_headers:
             headers.update(extra_headers)
