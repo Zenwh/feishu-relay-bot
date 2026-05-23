@@ -11,7 +11,11 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+from lark_oapi.api.im.v1 import (
+    CreateMessageRequest,
+    CreateMessageRequestBody,
+    ListChatRequest,
+)
 
 from .config import BotConfig
 from .ctrl import handle_ctrl
@@ -88,6 +92,9 @@ class Bot:
         if self._thread and self._thread.is_alive():
             self.logger.warning("already running")
             return
+        # 启动前先尝试 self-discover chat_id（chat_id 没配置时）
+        if not self._chat_id:
+            self._discover_chat_id()
         self.logger.info("starting bot %s app_id=%s", self.cfg.name, self.cfg.app_id)
         self._reconnect_enabled = True
         self._thread = threading.Thread(
@@ -96,6 +103,70 @@ class Bot:
             daemon=True,
         )
         self._thread.start()
+
+    def _discover_chat_id(self) -> None:
+        """启动时尝试列出 bot 加入的会话，自动选 p2p 单聊。
+
+        覆盖几种情形：
+        - 唯一会话 → 自动绑定（典型场景：员工部署一份，自己 DM bot）
+        - 多个会话 → 打日志列出候选，让运维填 chat_id 到 config
+        - 无会话 → 提示去飞书私聊 bot 一次
+
+        飞书 list_chat 接口不返回 chat_mode，无法服务端区分 p2p / group，
+        优先选择 name 为空的会话（飞书 P2P 单聊不命名），再 fallback 到候选去重。
+        需要 bot 应用具备 `im:chat` 或 `im:chat:readonly` 权限。
+        """
+        try:
+            all_chats: list[tuple[str, str]] = []  # (chat_id, name)
+            page_token: Optional[str] = None
+            for _ in range(5):  # 最多翻 5 页防止无限循环
+                builder = ListChatRequest.builder().page_size(100)
+                if page_token:
+                    builder = builder.page_token(page_token)
+                resp = self._lark_client.im.v1.chat.list(builder.build())
+                if not resp.success():
+                    self.logger.warning(
+                        "list chat failed: code=%s msg=%s — skip self-discover",
+                        resp.code, resp.msg,
+                    )
+                    return
+                data = resp.data
+                for item in (getattr(data, "items", None) or []):
+                    cid = getattr(item, "chat_id", "") or ""
+                    if cid:
+                        all_chats.append((cid, getattr(item, "name", "") or ""))
+                page_token = getattr(data, "page_token", None) or ""
+                if not getattr(data, "has_more", False) or not page_token:
+                    break
+
+            if not all_chats:
+                self.logger.warning(
+                    "self-discover: bot is in 0 chats. Please DM the bot once "
+                    "in Feishu to initialize, or set chat_id in config explicitly."
+                )
+                return
+
+            # P2P 单聊的 name 通常为空；group 有名字
+            p2p_candidates = [c for c in all_chats if not c[1]]
+            chosen = p2p_candidates if p2p_candidates else all_chats
+
+            if len(chosen) == 1:
+                self._chat_id = chosen[0][0]
+                self.logger.info(
+                    "self-discover: bound chat_id=%s (peer=%r)",
+                    self._chat_id, chosen[0][1],
+                )
+                return
+
+            self.logger.warning(
+                "self-discover: %d candidate chats, please set chat_id explicitly. Candidates: %s",
+                len(chosen),
+                ", ".join(f"{cid}({name!r})" for cid, name in chosen[:10]),
+            )
+        except Exception as e:
+            self.logger.warning(
+                "self-discover failed: %s — fallback to lazy discover from first message", e,
+            )
 
     def stop(self) -> None:
         """停止 bot，禁止重连。"""
