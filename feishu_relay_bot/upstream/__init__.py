@@ -58,18 +58,41 @@ class UpstreamClient:
             data = {"raw": r.text[:500]}
         return r.status_code, data
 
+    def _try_post(
+        self,
+        path: str,
+        payload: dict,
+        public_model: str,
+        extra_headers: Optional[dict] = None,
+    ) -> Tuple[int, dict]:
+        """带 fallback 的 post：主模型不支持时自动尝试备选模型。"""
+        status, data = self._post(path, payload, extra_headers)
+        if status == 400:
+            err_msg = str(data)
+            if "unsupported model" in err_msg or "model" in err_msg.lower():
+                for fb in self._models.get_fallbacks(public_model):
+                    body = dict(payload)
+                    body["model"] = fb
+                    logger.info("fallback: trying %s (was %s)", fb, payload.get("model"))
+                    status, data = self._post(path, body, extra_headers)
+                    if status == 200:
+                        logger.info("fallback success: %s", fb)
+                        break
+        return status, data
+
     # ---- OpenAI Chat 模式：按模型路由 ----------------------------------------
 
     def call_openai_chat_mode(
         self,
         public_model: str,
-        messages: list,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
+        payload: dict,
     ) -> Tuple[int, dict]:
         """
         客户端走 /v1/chat/completions（即 relay 协议默认 mode），
         bot 端按模型 endpoint 类型路由到 xpage 三个端点之一，最后归一化为 OpenAI 格式。
+
+        payload 为完整 OpenAI Chat 请求体（含 model, messages, temperature, max_tokens,
+        top_p, tools 等），bot 不做过滤，只替换模型名和做必要格式转换。
 
         返回 (http_status, normalized_dict)。normalized_dict 形如：
           {"content": str, "finish_reason": str, "usage": {...}}
@@ -81,41 +104,28 @@ class UpstreamClient:
                 "message": f"unsupported model: {public_model}",
             }
 
-        upstream_model = entry.upstream
         endpoint = entry.endpoint
 
         if endpoint == "messages":
-            return self._call_messages(
-                upstream_model, messages,
-                max_tokens or self._cfg.default_max_tokens, temperature,
-            )
+            return self._call_messages(public_model, payload)
         if endpoint == "responses":
-            return self._call_responses(
-                upstream_model, messages,
-                max_tokens or self._cfg.default_max_tokens, temperature,
-            )
+            return self._call_responses(public_model, payload)
         if endpoint == "chat":
-            return self._call_chat(upstream_model, messages, max_tokens, temperature)
+            return self._call_chat(public_model, payload)
 
         return 500, {"error": "bad_routing", "message": f"unknown endpoint: {endpoint}"}
 
     # ---- 三个 endpoint adapter ----------------------------------------------
 
     def _call_chat(
-        self, upstream_model: str, messages: list,
-        max_tokens: Optional[int], temperature: Optional[float],
+        self, public_model: str, payload: dict,
     ) -> Tuple[int, dict]:
-        payload: Dict[str, Any] = {
-            "model": upstream_model,
-            "messages": messages,
-            "stream": False,
-        }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if temperature is not None:
-            payload["temperature"] = temperature
+        entry = self._models.get(public_model)
+        body = dict(payload)
+        body["model"] = entry.upstream
+        body["stream"] = False  # bot 端不流，由 relay 端伪流
 
-        status, data = self._post("/v1/chat/completions", payload)
+        status, data = self._try_post("/v1/chat/completions", body, public_model)
         if status != 200:
             return status, data
 
@@ -128,26 +138,35 @@ class UpstreamClient:
         return 200, _normalize(content, finish, data.get("usage") or {})
 
     def _call_responses(
-        self, upstream_model: str, messages: list,
-        max_tokens: int, temperature: Optional[float],
+        self, public_model: str, payload: dict,
     ) -> Tuple[int, dict]:
+        entry = self._models.get(public_model)
+        messages = payload.pop("messages", [])
         system, rest = _split_system(messages)
         if len(rest) == 1 and rest[0].get("role") == "user":
             input_val: Any = rest[0].get("content", "")
         else:
             input_val = rest
 
-        payload: Dict[str, Any] = {
-            "model": upstream_model,
+        body: Dict[str, Any] = {
+            "model": entry.upstream,
             "input": input_val,
-            "max_output_tokens": max_tokens,
         }
         if system:
-            payload["instructions"] = system
-        if temperature is not None:
-            payload["temperature"] = temperature
+            body["instructions"] = system
 
-        status, data = self._post("/v1/responses", payload)
+        # 透传其他参数（如 temperature, max_output_tokens 等）
+        for k, v in payload.items():
+            if k == "max_tokens" and v is not None:
+                body["max_output_tokens"] = v
+            elif k not in ("model", "messages"):
+                body[k] = v
+
+        # 确保有 max_output_tokens
+        if "max_output_tokens" not in body or not body["max_output_tokens"]:
+            body["max_output_tokens"] = self._cfg.default_max_tokens
+
+        status, data = self._try_post("/v1/responses", body, public_model)
         if status != 200:
             return status, data
 
@@ -166,22 +185,30 @@ class UpstreamClient:
         return 200, _normalize(content, finish, data.get("usage") or {})
 
     def _call_messages(
-        self, upstream_model: str, messages: list,
-        max_tokens: int, temperature: Optional[float],
+        self, public_model: str, payload: dict,
     ) -> Tuple[int, dict]:
+        entry = self._models.get(public_model)
+        messages = payload.pop("messages", [])
         system, rest = _split_system(messages)
-        payload: Dict[str, Any] = {
-            "model": upstream_model,
+
+        body: Dict[str, Any] = {
+            "model": entry.upstream,
             "messages": rest,
-            "max_tokens": max_tokens,
         }
         if system:
-            payload["system"] = system
-        if temperature is not None:
-            payload["temperature"] = temperature
+            body["system"] = system
 
-        status, data = self._post(
-            "/v1/messages", payload,
+        # 透传其他参数（如 temperature, max_tokens 等）
+        for k, v in payload.items():
+            if k not in ("model", "messages"):
+                body[k] = v
+
+        # 确保有 max_tokens
+        if "max_tokens" not in body or not body["max_tokens"]:
+            body["max_tokens"] = self._cfg.default_max_tokens
+
+        status, data = self._try_post(
+            "/v1/messages", body, public_model,
             extra_headers={"anthropic-version": "2023-06-01"},
         )
         if status != 200:
@@ -225,8 +252,8 @@ class UpstreamClient:
         if "max_tokens" not in body or not body["max_tokens"]:
             body["max_tokens"] = self._cfg.default_max_tokens
 
-        return self._post(
-            "/v1/messages", body,
+        return self._try_post(
+            "/v1/messages", body, public_model,
             extra_headers={"anthropic-version": "2023-06-01"},
         )
 

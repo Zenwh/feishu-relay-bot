@@ -221,11 +221,18 @@ class Bot:
             ))
             return
 
-        status, resp = self.upstream.call_openai_chat_mode(
-            model, messages,
-            max_tokens=req.get("max_tokens"),
-            temperature=req.get("temperature"),
-        )
+        # 构建完整 payload，透传客户端所有参数
+        payload = {
+            "model": model,
+            "messages": messages,
+        }
+        for k in ("max_tokens", "temperature", "top_p", "frequency_penalty",
+                  "presence_penalty", "tools", "tool_choice", "response_format",
+                  "stream", "n", "stop", "seed", "logprobs", "logit_bias"):
+            if k in req and req[k] is not None:
+                payload[k] = req[k]
+
+        status, resp = self.upstream.call_openai_chat_mode(model, payload)
 
         if status == 200:
             usage = resp.get("usage") or {}
