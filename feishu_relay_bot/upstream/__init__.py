@@ -179,7 +179,10 @@ class UpstreamClient:
         if temperature is not None:
             payload["temperature"] = temperature
 
-        status, data = self._post("/v1/messages", payload)
+        status, data = self._post(
+            "/v1/messages", payload,
+            extra_headers={"anthropic-version": "2023-06-01"},
+        )
         if status != 200:
             return status, data
 
@@ -221,7 +224,10 @@ class UpstreamClient:
         if "max_tokens" not in body or not body["max_tokens"]:
             body["max_tokens"] = self._cfg.default_max_tokens
 
-        return self._post("/v1/messages", body)
+        return self._post(
+            "/v1/messages", body,
+            extra_headers={"anthropic-version": "2023-06-01"},
+        )
 
 
 # ============================================================================
