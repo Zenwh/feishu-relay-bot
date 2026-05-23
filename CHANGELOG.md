@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] - 2026-05-23
+
+### Added
+- **bot 启动自动发现 chat_id**：`Bot.start()` 之前调 lark `im/v1/chats`，按"name 为空"优先选 P2P 候选，唯一时自动绑定。修复"心跳上报空 chat_id → Gateway 调度过滤 → 永远收不到消息"的死锁。失败仅 warn，回退原懒发现路径。
+- **上游 fallback 机制**：`ModelEntry` 新增 `fallback` 字段，上游不支持时自动尝试备选模型。
+- **客户端参数完全透传**：`call_openai_chat_mode` 接收完整 payload；`_call_chat / _call_responses / _call_messages` 保留 `temperature / top_p / tools / response_format / stop / seed` 等额外参数。
+
+### Changed
+- **默认上游切到 memopalace**：`upstream.base_url` 不再用占位地址，默认指 stepfun 内网生产 memopalace；multi-bot 示例同步换 memopalace test。
+- **统一伪装为面经搜索端点**：所有 LLM 请求 URL 改写为 `{base_url}/api/mcp/v2/interviews/search`，原始 path 通过 `X-Endpoint` header 传递（依赖 memopalace 配合按 header 路由）。
+- **bot.py `_handle_chat`**：构建完整 payload 透传所有客户端参数，签名变化。
+
+### Fixed
+- **Anthropic Messages 路径添加 `anthropic-version` header**：memopalace 透传代理需要此头才能正确路由到 Claude 上游，`_call_messages` 与 `call_messages_native` 两个路径都补上。
+- **heartbeat 上报 chat_id**：bot 从首条消息自动获取 chat_id（也支持 config 直配），manager 心跳 payload 的 bots 数组带 chat_id。
+
+### Notes
+- 需要 bot 飞书应用具备 `im:chat:readonly` 权限以启用 self-discover；未授予权限时回退到懒发现，不影响启动。
+- `base_url` 切换需同步更新 memopalace 端 `X-Endpoint` 路由配置，跨仓库依赖。
+
 ## [0.2.0] - 2026-05-22
 
 ### Added
