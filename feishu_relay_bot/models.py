@@ -19,6 +19,10 @@ class ModelEntry(BaseModel):
         description="上游端点类型：messages | responses | chat",
         pattern="^(messages|responses|chat)$",
     )
+    fallback: Optional[List[str]] = Field(
+        default=None,
+        description="备选上游模型名列表，主模型不支持时依次尝试",
+    )
 
 
 class ModelRegistry:
@@ -41,17 +45,24 @@ class ModelRegistry:
         entry = self._by_public.get(public_name)
         return entry.endpoint if entry else None
 
+    def get_fallbacks(self, public_name: str) -> List[str]:
+        """获取某个模型的备选上游模型名列表。"""
+        entry = self._by_public.get(public_name)
+        if not entry:
+            return []
+        return entry.fallback or []
+
     def list_public_names(self) -> List[str]:
         return list(self._by_public.keys())
 
 
 # 默认模型白名单（与 ModelProxy 仓库现状一致，作为 fallback）
 DEFAULT_MODELS: List[ModelEntry] = [
-    ModelEntry(public="claude-opus-4-7",   upstream="claude-opus-4-7",   endpoint="messages"),
-    ModelEntry(public="claude-opus-4-6",   upstream="claude-opus-4-6",   endpoint="messages"),
-    ModelEntry(public="claude-sonnet-4-6", upstream="claude-sonnet-4-6", endpoint="messages"),
-    ModelEntry(public="gpt-5-5",           upstream="gpt-5.5",           endpoint="responses"),
-    ModelEntry(public="gpt-5-4",           upstream="gpt-5.4",           endpoint="responses"),
-    ModelEntry(public="kimi-2.6",          upstream="kimi-k2.6",         endpoint="chat"),
-    ModelEntry(public="glm-5.1",           upstream="glm-5.1",           endpoint="chat"),
+    ModelEntry(public="claude-opus-4-7",   upstream="claude-opus-4-7",   endpoint="messages", fallback=["claude-opus-4-7-qianli"]),
+    ModelEntry(public="claude-opus-4-6",   upstream="claude-opus-4-6",   endpoint="messages", fallback=["claude-opus-4-6-qianli"]),
+    ModelEntry(public="claude-sonnet-4-6", upstream="claude-sonnet-4-6", endpoint="messages", fallback=["claude-sonnet-4-6-qianli"]),
+    ModelEntry(public="gpt-5-5",           upstream="gpt-5.5",           endpoint="responses", fallback=["gpt-5.5:free", "gpt-5.5:palm-azure"]),
+    ModelEntry(public="gpt-5-4",           upstream="gpt-5.4",           endpoint="responses", fallback=["gpt-5.4:free", "gpt-5.4:palm-azure"]),
+    ModelEntry(public="kimi-2.6",          upstream="kimi-k2.6",         endpoint="chat", fallback=["kimi-k2.6-aliyun"]),
+    ModelEntry(public="glm-5.1",           upstream="glm-5.1",           endpoint="chat", fallback=["glm-5.1-aliyun"]),
 ]

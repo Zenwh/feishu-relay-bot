@@ -33,7 +33,7 @@ class UpstreamConfig(BaseModel):
     """上游 LLM 网关（xpage / MP / OpenAI 等）配置。"""
     base_url: str = Field(..., description="上游 base URL，例如 http://xpage:8800")
     api_key: str = Field("", description="上游 API key（Bearer token）")
-    timeout_s: int = Field(240, description="HTTP 请求超时（秒）")
+    timeout_s: int = Field(1200, description="HTTP 请求超时（秒），thinking 模型需要 20 分钟")
     default_max_tokens: int = Field(4096, description="客户端不指定时的 max_tokens")
 
     @field_validator("base_url")
